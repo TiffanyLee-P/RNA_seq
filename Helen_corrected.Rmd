@@ -1,0 +1,522 @@
+---
+title: "Helen_corrected"
+output: html_document
+date: "2024-03-17"
+---
+
+```{r load data, include=FALSE}
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+setwd("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3")
+samples <- list.files("rsem")
+expr <- sapply(samples, function(sample){
+  file <- paste0("rsem/",sample,"/",sample,".genes.results")
+  quant <- read.csv(file, sep="\t", header=T)
+  tpm <- setNames(quant$TPM, quant$gene_id)
+  return(tpm)
+})
+```
+
+```{r load library, include=FALSE}
+library(tibble)
+library(dplyr)
+library(biomaRt)
+library(ggplot2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+```
+
+```{r generate metadata}
+metadata <- tibble(
+  SampleName = c(
+    "R1_D3_PRC2i","R1_D6_PRC2i","R2_D3_DMSO","R2_D3_PRC2i","R2_D9_DMSO"),
+  Filename = c(
+    "Replicate1_Day3_PRC2i",
+    "Replicate1_Day6_PRC2i",
+    "Replicate2_Day3_DMSO",
+    "Replicate2_Day3_PRC2i",
+    "Replicate2_Day9_DMSO"
+  ),
+  Replicate = c(
+    "1","1","2","2","2"
+  ),
+  Treatment = c(
+    "PRC2i","PRC2i","DMSO","PRC2i","Washout"
+  ),
+  Timepoint = c(
+    "Day3","Day6","Day3","Day3","Day9"
+  )
+)
+print(metadata)
+
+
+```
+
+
+
+```{r check expression, echo=FALSE}
+# Identify constant or zero columns
+
+
+library(biomaRt)
+ensembl <-
+  useMart("ENSEMBL_MART_ENSEMBL", 
+          host="https://grch37.ensembl.org",
+          path="/biomart/martservice", 
+          dataset = "hsapiens_gene_ensembl")
+meta_genes <- getBM(attributes = c("ensembl_gene_id",
+                                    "ensembl_gene_id_version",
+                                     "hgnc_symbol",
+                                     "description",
+                                  "chromosome_name",
+                                     "start_position",
+                                     "entrezgene_id",
+                                     "end_position",
+                                    "strand"),
+                      filters = "ensembl_gene_id_version",
+                      values = rownames(expr),
+                      mart = ensembl) %>%
+    right_join(data.frame(ensembl_gene_id_version = rownames(expr)),
+               by = "ensembl_gene_id_version") %>%
+    distinct(ensembl_gene_id_version, .keep_all = TRUE)
+
+
+```
+
+```{r check expression2, echo=FALSE}
+expr <- expr[meta_genes$ensembl_gene_id_version,]
+expressed <- apply(expr, 1, function(row) all(row > 1))
+expr <- expr[which(expressed),]
+
+```
+
+
+```{r check expression3, echo=FALSE}
+expr_df <- data.frame(expr)
+expr_df <- as.data.frame(expr)
+expr_df$ensembl_gene_id_version <- rownames(expr_df)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(expr_df), ]
+
+expr_with_gene_id <- right_join(expr_df, 
+                                metagene_subset %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol), 
+                                by = "ensembl_gene_id_version")
+```
+
+
+```{r check expression4, echo=FALSE}
+dim(expr)
+
+avg_expr <- rowMeans(expr)
+
+layout(matrix(1:2, nrow=1))
+hist(avg_expr)
+hist(log2(avg_expr + 1))
+hist(log10(avg_expr +1 ))
+
+```
+
+
+```{r  1}
+library(data.table)
+library(tidyr)
+library(matrixStats)
+##what is the distribution of the z-score calculate
+#take the matrix and melt to make a table 2 columns 1-sample 2- score value
+#plot the zscore variation 
+#first find the duplicates 
+#subset fo
+rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+m1_melt <- melt(as.matrix(log10(expr_with_gene_id[, 1:5]+1)))
+m1_melt$zscore <- m1_melt$value - mean(m1_melt$value)/sd(m1_melt$value)
+hist(m1_melt$value)
+hist(m1_melt$zscore)
+dim(expr_with_gene_id[, 1:5])
+heatmap_input <- pivot_wider(m1_melt[c("Var1","zscore","Var2")], names_from = "Var2",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+#calculate the ranges 
+head(rowRanges(m1))
+#select the rows of interest that are the top 2000 genes that have the largest change
+
+
+```
+
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+  # genelabels1 <- rowAnnotation(
+  #   Genes = anno_mark(
+  #     at = seq(1, nrow(m1)),
+  #     labels = rownames(m1),
+  #     labels_gp = gpar(fontsize = 4),
+  #     padding = 0.5))
+draw(hmap1)
+# draw(hmap1 + genelabels1)
+
+```
+```{r 3}
+# Helen's advices
+#1
+#normalisation per total number of reads in a sample
+#extract dataframe of numbers 
+#calculate a vector that has the sum of every columm 
+#column-wise division 
+##check dplyr if someone has already performed division of column based on sum of column 
+
+#2
+##message helen -- ?zscore be calculated per row/column
+#zscore does not take into accoount that you are assuming no expression difference at gene of interrest
+
+#3
+#sequencing depth: read number per gene per sample + top 10-20% in quantile to check if most of the genes that should have high reads have enough read number.
+
+```
+
+
+
+```{r 4}
+#Below is Hongpei messing around with the help of chatgpt
+```
+
+
+
+```{r 5}
+#Here I calculate the sum of every column(I think one column means one sample,right? So I didn't swap the columns and rows here)
+
+# Convert columns 2 to 6 to numeric if they are not already numeric
+expr_with_gene_id[, 1:5] <- lapply(expr_with_gene_id[, 1:5], as.numeric)
+
+# Check if there are any NA or missing values in the columns
+if (anyNA(expr_with_gene_id[, 1:5])) {
+  # Handle NA or missing values as needed (e.g., replace with 0, drop rows, etc.)
+  expr_with_gene_id[, 1:5][is.na(expr_with_gene_id[, 1:5])] <- 0  # Replace NA with 0
+}
+
+# Now calculate the sum of reads for columns 2 to 6 in expr_with_gene_id
+column_sums <- colSums(expr_with_gene_id[, 1:5])
+print(column_sums)
+
+# Perform division for each column by its sum
+expr_with_gene_id_divided <- expr_with_gene_id
+for (i in 1:5) {  # Adjust the range if needed
+  expr_with_gene_id_divided[[paste0("divided_", colnames(expr_with_gene_id)[i])]] <- expr_with_gene_id[[i]] / column_sums[i ]
+}
+
+# Check the resulting dataframe
+head(expr_with_gene_id_divided)
+
+
+
+```
+Comments on the above chunk:
+1. The sum of every column is almost the same across all samples because that's what tpm does.So I think this step and also division of column based on sum of column are not necessary.
+2. Since tpm already normalize the library size and gene length, one more thing that tpm does not normalize is the library composition which in our case I think is not important. Because my samples are all hiPSCs rather than from different organisms.
+3. I think that means I can directly compare among samples using tpm data by doing a column-wise z score calculation. But just in case, I also did z-score calculation within each sample.
+
+```{r 6}
+# Here I used the columns divided by the sum of each sample to calculate z-score within each sample - I think this is equal to z score by rows
+# Assuming you have performed division and created new divided columns in expr_with_gene_id_divided
+
+# Calculate z-scores for each divided column
+z_scores <- apply(expr_with_gene_id_divided[, grepl("^divided_", colnames(expr_with_gene_id_divided))], 2, function(x) (x - mean(x)) / sd(x))
+
+# Add z-scores to expr_with_gene_id_divided
+for (i in 1:ncol(z_scores)) {
+  expr_with_gene_id_divided[[paste0("zscore_", colnames(z_scores)[i])]] <- z_scores[, i]
+}
+
+# Check the resulting dataframe
+head(expr_with_gene_id_divided)
+
+
+#heatmap_input <- pivot_wider(m1_melt[c("Var1","zscore","Var2")], names_from = "Var2",values_from = "zscore")
+#dim(heatmap_input)
+#select for rows that have the largest range 
+m2 <- as.matrix(expr_with_gene_id_divided[14:18])
+hist(m2[,1])
+#calculate the ranges 
+head(rowRanges(m2))
+```
+
+```{r 7, echo=FALSE}
+hmap2 <- Heatmap(m2,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+  # genelabels1 <- rowAnnotation(
+  #   Genes = anno_mark(
+  #     at = seq(1, nrow(m1)),
+  #     labels = rownames(m1),
+  #     labels_gp = gpar(fontsize = 4),
+  #     padding = 0.5))
+draw(hmap2)
+# draw(hmap1 + genelabels1)
+
+```
+Comments on the above chunks:
+I think the results make sense because within each sample,there are only a small proportion of genes that are deviated from the mean expression. So this is not what we want to know. But I think I could still look into whether the top 5% deviated genes are the same across all the samples(I didn't do this though) since the correlation in the heatmap still shows the same pattern indicating that there are some genes differentiating the samples.
+
+```{r 8}
+# Here I calculated the z score by rows to check z-score within each sample (again! without the division of columns by the sum of each column - but the result is the same as above)
+# By rows
+data_to_calculate1 <-  lapply(expr_with_gene_id[, 1:5], as.numeric)
+
+
+# Function to calculate z-score
+calculate_z_score1 <- function(x) {
+  mean_val <- mean(x, na.rm = TRUE)
+  std_dev <- sd(x, na.rm = TRUE)
+  z_score <- (x - mean_val) / std_dev
+  return(z_score)
+}
+
+# Apply the calculate_z_score function to each column
+z_scores1 <- lapply(data_to_calculate1, calculate_z_score1)
+
+# Convert the list of z-scores to a data frame
+z_scores_df1 <- as.data.frame(z_scores1)
+
+# Add gene IDs back to the data frame
+z_scores_df1$ensembl_gene_id_version <- expr_with_gene_id$ensembl_gene_id_version
+
+# Check the resulting data frame
+head(z_scores_df1)
+
+
+```
+```{r 9}
+# Here I calculated the z score across all the samples
+# By columns
+
+# Exclude the first column (gene IDs) for z-score calculation
+data_to_calculate <-  expr_with_gene_id[, 1:5]
+
+# Calculate the mean and standard deviation across all rows and columns
+mean_vals <- rowMeans(data_to_calculate, na.rm = TRUE)
+std_devs <- apply(data_to_calculate, 1, sd, na.rm = TRUE)
+
+# Calculate z-scores manually for each data point
+z_scores <- sweep(data_to_calculate, 1, mean_vals, "-")  # Subtract the row means
+z_scores <- sweep(z_scores, 1, std_devs, "/")  # Divide by the row standard deviations
+
+# Convert the matrix of z-scores to a data frame
+z_scores_df <- as.data.frame(z_scores)
+
+# Add gene IDs back to the data frame
+z_scores_df$ensembl_gene_id_version <- expr_with_gene_id$ensembl_gene_id_version
+
+# Check the resulting data frame
+head(z_scores_df)
+m3 <- as.matrix(z_scores_df[1:5])
+hist(m3[,1])
+#calculate the ranges 
+head(rowRanges(m3))
+# Calculate the row ranges
+# Calculate the row ranges for matrix m3
+row_ranges <- apply(m3, 1, function(row) diff(range(row, na.rm = TRUE)))
+
+# Get the row indices in decreasing order of row ranges
+sorted_indices <- order(row_ranges, decreasing = TRUE)
+
+# Sort the matrix m3 based on the sorted indices
+sorted_m3 <- m3[sorted_indices, ]
+
+# Check the sorted matrix
+head(sorted_m3)
+
+
+```
+Comments on the above chunks:
+It's interesting to see a normal distribution of gene expression in sample 1 - is this artifect or something worth looking into?
+
+
+```{r 10, echo=FALSE}
+# Here I plot the calculated z-score above using heatmap
+hmap3 <- Heatmap(sorted_m3,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+  # genelabels1 <- rowAnnotation(
+  #   Genes = anno_mark(
+  #     at = seq(1, nrow(m1)),
+  #     labels = rownames(m1),
+  #     labels_gp = gpar(fontsize = 4),
+  #     padding = 0.5))
+draw(hmap3)
+# draw(hmap1 + genelabels1)
+
+```
+```{r 11}
+#sequencing depth: read number per gene per sample + top 10-20% in quantile to check if most of the genes that should have high reads have enough read number.
+hist(m3[,1])
+hist(m3[,2])
+hist(m3[,3])
+hist(m3[,4])
+hist(m3[,5])
+```
+Comments on the above chunk:
+I'm really confused by the distribution above. I can see how the correlation among samples is derived but why the differences in distribution? Because zscore does not take into account that we are assuming no expression difference at gene of interest, the distribution above could just be artifacts that zcore trying to "force" a difference even if there is actually no significant difference. 
+
+```{r 12}
+# Here i want to see what the "deviated" genes are 
+sorted_m3 <- as.data.frame(sorted_m3)
+sorted_m3$ensembl_gene_id_version <- rownames(sorted_m3)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset1 <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(sorted_m3), ]
+
+sorted_m3_1 <- right_join(sorted_m3, 
+                                metagene_subset1 %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol,entrezgene_id), 
+                                by = "ensembl_gene_id_version")
+library(dplyr)
+
+# Filter out non-NA rows in sorted_m3_1
+sorted_m3_1_filtered <- sorted_m3_1 %>%
+  filter(!is.na(hgnc_symbol))  # Replace zscore_colname with the actual column name containing the z-scores
+rownames(sorted_m3_1_filtered)<-sorted_m3_1_filtered$ensembl_gene_id_version
+# Check the filtered data frame
+head(sorted_m3_1_filtered)
+
+```
+```{r 13, echo=FALSE}
+ensids<-sorted_m3_1_filtered$ensembl_gene_id
+library(org.Hs.eg.db)
+#keytypes(org.Hs.eg.db)
+#head(columns(org.Hs.eg.db))
+cols <- c("SYMBOL", "GENENAME")
+#select(org.Hs.eg.db, keys=ensids, columns=cols, keytype="ENSEMBL")
+```
+
+```{r 14}
+# I pretended the row range is the fold change
+library(gage)
+library(gageData)
+data(kegg.sets.hs)
+# Calculate the row ranges for matrix m3
+sm3 <- as.matrix(sorted_m3_1_filtered[1:5])
+row_ranges <- (rowRanges(sm3)[,2]-rowRanges(sm3)[,1])
+
+# Add the row ranges as a new column to sorted_m3
+sorted_m3_1_filtered$Row_Range <- row_ranges
+
+# Check the updated sorted_m3 data frame
+head(sorted_m3_1_filtered)
+#kegg
+FC=sorted_m3_1_filtered$Row_Range
+names(FC)=sorted_m3_1_filtered$entrezgene_id
+head(FC)
+keggres = gage(FC, gsets=kegg.sets.hs)
+lapply(keggres, head)
+```
+
+
+
+```{r 15}
+# Here I want to see genes in single column deviated from the rest of the columns
+
+
+sm3 <- as.matrix(sorted_m3_1_filtered[1:5])
+sm3_abs_4th_column <- abs(sm3[, 4])
+sm3 <- cbind(sm3, abs_4th_column = sm3_abs_4th_column)
+sorted_indices <- order(sm3[,6], decreasing = TRUE)
+sorted_R2_D3_P <- sm3[sorted_indices, ]
+
+
+metagene_subset2 <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(sorted_R2_D3_P), ]
+sorted_R2_D3_P <- as.data.frame(sorted_R2_D3_P)
+sorted_R2_D3_P$ensembl_gene_id_version <- rownames(sorted_R2_D3_P)
+sorted_R2_D3_P <- right_join(sorted_R2_D3_P, 
+                                metagene_subset2 %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol,entrezgene_id), 
+                                by = "ensembl_gene_id_version")
+
+#kegg
+FC=sorted_R2_D3_P[,6]
+names(FC)=sorted_R2_D3_P$entrezgene_id
+head(FC)
+keggres = gage(FC, gsets=kegg.sets.hs)
+lapply(keggres, head)
+```
+Comments on the above chunks:
+I could draw a conclusion that my data is rubbish and can't give any substantial information. I can't even trust the kegg result that it's the metabolic pathways and oxidative phosphorylation that cause the deviation.
+
+```{r 16}
+# Here I want to check the sequencing depth: read number per gene per sample + top 10-20% in quantile to check if most of the genes that should have high reads have enough read number.
+
+# Calculate the sum of reads per row
+reads_per_row <- rowMeans(expr_with_gene_id[1:5])
+
+# Plot the distribution of read counts per row
+hist(log2(reads_per_row + 1), breaks = 10, main = "Distribution of Read Counts per Row", xlab = "log2(reads_mean_per_row")
+
+# Calculate the quantiles to identify the top 10-20% rows based on read counts
+top_quantile_rows <- quantile(reads_per_row, probs = c(0.8, 0.9))
+
+# Extract the top 10-20% rows from expr_with_gene_id
+top_rows <- expr_with_gene_id[reads_per_row >= top_quantile_rows[1] & reads_per_row <= top_quantile_rows[2], ]
+
+# Check the top rows
+head(top_rows)
+
+
+```
+Comments on the above chunks:
+1. Since we are using the tpm data which I don't have a reference to compare (I probably need to perform the same pipeline in a similar public dataset), I'm not sure if these values can draw the conclusion that the sequencing depth is enough.  
+
+
+```{r}
+# I want to check the expression level of target gene list in our data
+head(expr_with_gene_id)
+target <- tibble(target_gene=c("FOXC1", "FOXQ2", "SOX18", "TBX4", "TBX5", "HOXA13"))
+# Filter the expr_with_gene_id data frame
+subset_target <- expr_with_gene_id %>%
+  filter(hgnc_symbol %in% target)
+
+# View the subsetted data
+print(subset_target)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

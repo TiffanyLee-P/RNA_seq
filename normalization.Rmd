@@ -1,0 +1,248 @@
+---
+title: "Normalization"
+output: html_document
+date: "2024-05-17"
+---
+
+```{r load data, include=FALSE}
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+setwd("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3")
+samples <- list.files("rsem")
+#get tpm counts
+expr_tpm <- sapply(samples, function(sample){
+  file <- paste0("rsem/",sample,"/",sample,".genes.results")
+  quant <- read.csv(file, sep="\t", header=T)
+  tpm <- setNames(quant$TPM, quant$gene_id)
+  return(tpm)
+})
+#get expected counts
+expr_raw <- sapply(samples, function(sample){
+  file <- paste0("rsem/",sample,"/",sample,".genes.results")
+  quant <- read.csv(file, sep="\t", header=T)
+  tpm <- setNames(quant$expected_count, quant$gene_id)
+  return(tpm)
+})
+```
+
+
+
+```{r load library, include=FALSE}
+library(tibble)
+library(dplyr)
+library(biomaRt)
+library(ggplot2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(biomaRt)
+library(data.table)
+library(tidyr)
+library(matrixStats)
+library(ggplot2)
+library(plyr)
+```
+
+```{r generate metadata}
+metadata <- tibble(
+  SampleName = c(
+    "R1_D3_PRC2i","R1_D6_PRC2i","R2_D3_DMSO","R2_D3_PRC2i","R2_D9_DMSO"),
+  Filename = c(
+    "Replicate1_Day3_PRC2i",
+    "Replicate1_Day6_PRC2i",
+    "Replicate2_Day3_DMSO",
+    "Replicate2_Day3_PRC2i",
+    "Replicate2_Day9_DMSO"
+  ),
+  Replicate = c(
+    "1","1","2","2","2"
+  ),
+  Treatment = c(
+    "PRC2i","PRC2i","DMSO","PRC2i","Washout"
+  ),
+  Timepoint = c(
+    "Day3","Day6","Day3","Day3","Day9"
+  )
+)
+print(metadata)
+
+
+```
+
+```{r check expression4, echo=FALSE}
+#check the distribution differences between tpm and expected counts
+dim(expr_tpm)
+avg_expr_tpm <- rowMeans(expr_tpm)
+layout(matrix(1:2, nrow=1))
+hist(avg_expr_tpm)
+hist(log2(avg_expr_tpm + 1))
+hist(log10(avg_expr_tpm +1 ))
+
+dim(expr_raw)
+avg_expr_raw <- rowMeans(expr_raw)
+layout(matrix(1:2, nrow=1))
+hist(avg_expr_raw)
+hist(log2(avg_expr_raw + 1))
+hist(log10(avg_expr_raw +1 ))
+
+```
+
+```{r check expression2, echo=FALSE}
+#expr <- expr[meta_genes$ensembl_gene_id_version,]
+#expr <- expr[meta_genes$hgnc_symbol,]
+#filter genes that have no expression in all samples
+expressed_tpm <- apply(expr_tpm, 1, function(row) all(row > 0))
+expr_tpm_filtered <- expr_tpm[which(expressed_tpm),]
+expressed_raw <- apply(expr_raw, 1, function(row) all(row > 0))
+expr_raw_filtered <- expr_raw[which(expressed_raw),]
+```
+
+
+```{r check expression4, echo=FALSE}
+#check the distribution of filtered counts
+dim(expr_tpm_filtered)
+avg_expr_tpm <- rowMeans(expr_tpm_filtered)
+layout(matrix(1:2, nrow=1))
+hist(avg_expr_tpm)
+hist(log2(avg_expr_tpm + 1))
+hist(log10(avg_expr_tpm +1 ))
+
+dim(expr_raw_filtered)
+avg_expr_raw <- rowMeans(expr_raw_filtered)
+layout(matrix(1:2, nrow=1))
+hist(avg_expr_raw)
+hist(log2(avg_expr_raw + 1))
+hist(log10(avg_expr_raw +1 ))
+
+```
+gene_id of target genes:
+FOXQ1:ENSG00000164379.7
+FOXC2:ENSG00000176692.8
+HOXA13:ENSG00000106031.9
+TBX5:ENSG00000089225.20
+TBX4:ENSG00000121075.11
+SOX18:ENSG00000203883.7
+
+```{r load data, include=FALSE}
+#see if the target genes are in the count matrix
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+target_gene_list <- c("ENSG00000164379.7","ENSG00000176692.8","ENSG00000106031.9","ENSG00000089225.20","ENSG00000121075.11","ENSG00000203883.7")
+filtered_data <- subset(expr_raw, rownames(expr_raw) %in% target_gene_list )
+
+```
+
+```{r}
+ensembl <-
+  useMart("ENSEMBL_MART_ENSEMBL", 
+          host="https://grch37.ensembl.org",
+          path="/biomart/martservice", 
+          dataset = "hsapiens_gene_ensembl")
+meta_genes <- getBM(attributes = c("ensembl_gene_id",
+                                    "ensembl_gene_id_version",
+                                     "hgnc_symbol",
+                                     "description",
+                                  "chromosome_name",
+                                     "start_position",
+                                     "entrezgene_id",
+                                     "end_position", 
+                                    "strand"),
+                      filters = "ensembl_gene_id_version",
+                      values = rownames(expr_raw_filtered),
+                      mart = ensembl) %>%
+    right_join(data.frame(ensembl_gene_id_version = rownames(expr_raw_filtered)),
+               by = "ensembl_gene_id_version") %>%
+    distinct(ensembl_gene_id_version, .keep_all = TRUE)
+```
+
+```{r check expression3, echo=FALSE}
+#annotate the genes; problems here: the biomart annotation here is missing lots of things
+expr_df <- data.frame(expr_raw_filtered)
+expr_df <- as.data.frame(expr_raw_filtered)
+expr_df$ensembl_gene_id_version <- rownames(expr_raw_filtered)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(expr_df), ]
+expr_with_gene_id <- right_join(expr_df, 
+                                metagene_subset %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol), 
+                                by = "ensembl_gene_id_version")
+rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+#rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+
+expr_df_tpm <- data.frame(expr_tpm_filtered)
+expr_df_tpm <- as.data.frame(expr_tpm_filtered)
+expr_df_tpm$ensembl_gene_id_version <- rownames(expr_tpm_filtered)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(expr_df_tpm), ]
+expr_with_gene_id_tpm <- right_join(expr_df_tpm, 
+                                metagene_subset %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol), 
+                                by = "ensembl_gene_id_version")
+rownames(expr_with_gene_id_tpm) <- expr_with_gene_id_tpm$ensembl_gene_id_version
+#rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+```
+
+```{r}
+
+#try to compare the z-score differences between raw and tpm data
+
+m1_melt <- reshape2::melt(expr_with_gene_id, id.vars="ensembl_gene_id_version")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$ensembl_gene_id_version, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+m1_melt <- reshape2::melt(expr_with_gene_id_tpm, id.vars="ensembl_gene_id_version")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$ensembl_gene_id_version, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+```
+
+```{r}
+#try to normalize the filtered expected counts
+library(DESeq2)
+#expr_raw_filtered <- round(expr_raw_filtered)
+dds <- DESeqDataSetFromMatrix(countData = expr_raw_filtered,
+                                colData = metadata,
+                                design = ~ Treatment )
+rld_rnaseq <- rlog(dds, blind = T)
+ds<- assay(rld_rnaseq)
+vsd <- varianceStabilizingTransformation(dds)
+vs<-assay(vsd)
+```
+
+```{r}
+library("factoextra")
+library("FactoMineR")
+#expr_filtered <- expr[, -3]
+pca.data <- PCA(t(ds), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data, labelsize = 3, repel = TRUE,xlim=c(-200, 200) , ylim= c(-200, 200))+
+   theme(text = element_text(size = 7.5),
+         axis.title = element_text(size = 7.5),
+         axis.text = element_text(size = 7.5)
+         )
+```
+```{r}
+library("factoextra")
+library("FactoMineR")
+#expr_filtered <- expr[, -3]
+pca.data <- PCA(t(vs), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data, labelsize = 3, repel = TRUE,xlim=c(-200, 200) , ylim= c(-200, 200))+
+   theme(text = element_text(size = 7.5),
+         axis.title = element_text(size = 7.5),
+         axis.text = element_text(size = 7.5)
+         )
+```
+

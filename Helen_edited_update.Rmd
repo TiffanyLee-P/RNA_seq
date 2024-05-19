@@ -1,0 +1,594 @@
+---
+title: "Helen_corrected"
+output: html_document
+date: "2024-03-17"
+---
+
+```{r load data, include=FALSE}
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+setwd("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3")
+samples <- list.files("rsem")
+expr_o <- sapply(samples, function(sample){
+  file <- paste0("rsem/",sample,"/",sample,".genes.results")
+  quant <- read.csv(file, sep="\t", header=T)
+  tpm <- setNames(quant$TPM, quant$gene_id)
+  return(tpm)
+})
+```
+
+```{r load data, include=FALSE}
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+filtered_data <- subset(expr, gene_id == "ENSG00000203883.7")
+
+```
+
+```{r load library, include=FALSE}
+library(tibble)
+library(dplyr)
+library(biomaRt)
+library(ggplot2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(biomaRt)
+library(data.table)
+library(tidyr)
+library(matrixStats)
+library(ggplot2)
+library(plyr)
+```
+
+```{r generate metadata}
+metadata <- tibble(
+  SampleName = c(
+    "R1_D3_PRC2i","R1_D6_PRC2i","R2_D3_DMSO","R2_D3_PRC2i","R2_D9_DMSO"),
+  Filename = c(
+    "Replicate1_Day3_PRC2i",
+    "Replicate1_Day6_PRC2i",
+    "Replicate2_Day3_DMSO",
+    "Replicate2_Day3_PRC2i",
+    "Replicate2_Day9_DMSO"
+  ),
+  Replicate = c(
+    "1","1","2","2","2"
+  ),
+  Treatment = c(
+    "PRC2i","PRC2i","DMSO","PRC2i","Washout"
+  ),
+  Timepoint = c(
+    "Day3","Day6","Day3","Day3","Day9"
+  )
+)
+print(metadata)
+
+
+```
+
+
+
+```{r check expression, echo=FALSE}
+# Identify constant or zero columns
+
+
+ensembl <-
+  useMart("ENSEMBL_MART_ENSEMBL", 
+          host="https://grch37.ensembl.org",
+          path="/biomart/martservice", 
+          dataset = "hsapiens_gene_ensembl")
+meta_genes <- getBM(attributes = c("ensembl_gene_id",
+                                    "ensembl_gene_id_version",
+                                     "hgnc_symbol",
+                                     "description",
+                                   
+                                  "chromosome_name",
+                                     "start_position",
+                                     "entrezgene_id",
+                                     "end_position",
+                                    "strand"),
+                      filters = "ensembl_gene_id_version",
+                      values = rownames(expr),
+                      mart = ensembl) %>%
+    right_join(data.frame(ensembl_gene_id_version = rownames(expr)),
+               by = "ensembl_gene_id_version") %>%
+    distinct(ensembl_gene_id_version, .keep_all = TRUE)
+
+
+```
+
+```{r}
+ensembl = useDataset("hsapiens_gene_ensembl",mart=ensembl)
+meta_genes <- getBM(attributes = c("ensembl_gene_id",
+                                    "ensembl_gene_id_version",
+                                     "hgnc_symbol",
+                                     "description",
+                                   
+                                  "chromosome_name",
+                                     "start_position",
+                                     "entrezgene_id",
+                                     "end_position",
+                                    "strand"),
+                      filters = "ensembl_gene_id_version",
+                      values = rownames(expr),
+                      mart = ensembl) %>%
+    right_join(data.frame(ensembl_gene_id_version = rownames(expr)),
+               by = "ensembl_gene_id_version") %>%
+    distinct(ensembl_gene_id_version, .keep_all = TRUE)
+filters = listFilters(ensembl)
+filters[1:5,]
+attributes = listAttributes(ensembl)
+attributes[1:5,]
+```
+
+
+
+```{r}
+#input TPM and FPKM 
+#TPM is normalized for sequencing depth and gene length, gene count comparisons within a sample or between samples 
+#FPKM would be more appropriate for comparison between genes within a sample --> NOT recommended
+
+#use TPM 
+```
+
+
+
+```{r check expression2, echo=FALSE}
+expr <- expr[meta_genes$ensembl_gene_id_version,]
+#expr <- expr[meta_genes$hgnc_symbol,]
+#expressed <- apply(expr, 1, function(row) all(row > 0))
+#expr <- expr[which(expressed),]
+
+```
+
+
+```{r check expression3, echo=FALSE}
+expr_df <- data.frame(expr)
+expr_df <- as.data.frame(expr)
+expr_df$ensembl_gene_id_version <- rownames(expr_df)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(expr_df), ]
+
+expr_with_gene_id <- right_join(expr_df, 
+                                metagene_subset %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol,entrezgene_id), 
+                                by = "ensembl_gene_id_version")
+rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+
+```
+
+
+```{r check expression4, echo=FALSE}
+dim(expr)
+
+avg_expr <- rowMeans(expr)
+
+layout(matrix(1:2, nrow=1))
+hist(avg_expr)
+hist(log2(avg_expr + 1))
+hist(log10(avg_expr +1 ))
+
+```
+```{r}
+
+##what is the distribution of the z-score calculate
+#take the matrix and melt to make a table 2 columns 1-sample 2- score value
+#plot the zscore variation 
+#first find the duplicates 
+#subset fo
+
+m1_melt <- reshape2::melt(expr_with_gene_id, id.vars="ensembl_gene_id")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$ensembl_gene_id, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+
+```
+
+
+```{r  1}
+m2_melt<-drop_na(m1_melt)
+
+#get the rows with the largest ranges 
+heatmap_input <- pivot_wider(m2_melt[c("ensembl_gene_id","zscore","variable")], names_from = "variable",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+rownames(m1)<-heatmap_input$ensembl_gene_id
+#calculate the ranges 
+#head(rowRanges(m1))
+```
+
+
+```{r}
+
+#calculate the ranges 
+head(rowRanges(m1))
+#select the rows of interest that are the top 2000 genes that have the largest change
+```
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+  # genelabels1 <- rowAnnotation(
+  #   Genes = anno_mark(
+  #     at = seq(1, nrow(m1)),
+  #     labels = rownames(m1),
+  #     labels_gp = gpar(fontsize = 4),
+  #     padding = 0.5))
+draw(hmap1)
+# draw(hmap1 + genelabels1)
+
+```
+
+```{r 12}
+# Here i want to see what the "deviated" genes are 
+sorted_m1 <- as.data.frame(m1)
+sorted_m1$ensembl_gene_id <- rownames(sorted_m1)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subsetm1 <- meta_genes[meta_genes$ensembl_gene_id %in% rownames(sorted_m1), ]
+
+sorted_m1_1 <- right_join(sorted_m1, 
+                                metagene_subsetm1 %>% 
+                                    dplyr::select(ensembl_gene_id, ensembl_gene_id,hgnc_symbol,entrezgene_id), 
+                                by = "ensembl_gene_id")
+library(dplyr)
+
+# Filter out non-NA rows in sorted_m3_1
+sorted_m1_1_filtered <- sorted_m1_1 %>%
+  filter(!is.na(hgnc_symbol))  # Replace zscore_colname with the actual column name containing the z-scores
+rownames(sorted_m1_1_filtered)<-sorted_m1_1_filtered$ensembl_gene_id
+# Check the filtered data frame
+head(sorted_m1_1_filtered[5:8],20)
+
+```
+
+```{r}
+ensids<-sorted_m1_1_filtered$ensembl_gene_id
+library(org.Hs.eg.db)
+#keytypes(org.Hs.eg.db)
+#head(columns(org.Hs.eg.db))
+cols <- c("SYMBOL", "GENENAME")
+#select(org.Hs.eg.db, keys=ensids, columns=cols, keytype="ENSEMBL")
+```
+
+```{r 14}
+# I pretended the row range is the fold change
+library(gage)
+library(gageData)
+data(kegg.sets.hs)
+# Calculate the row ranges for matrix m3
+sm1 <- as.matrix(sorted_m1_1_filtered[1:5])
+row_ranges <- (rowRanges(sm1)[,2]-rowRanges(sm1)[,1])
+
+# Add the row ranges as a new column to sorted_m3
+sorted_m1_1_filtered$Row_Range <- row_ranges
+
+# Check the updated sorted_m3 data frame
+head(sorted_m1_1_filtered)
+#kegg
+FC=sorted_m1_1_filtered$Row_Range
+names(FC)=sorted_m1_1_filtered$entrezgene_id
+head(FC)
+keggres = gage(FC, gsets=kegg.sets.hs)
+lapply(keggres, head)
+```
+```{r check expression, echo=FALSE}
+# Identify constant or zero columns
+
+#pca.result <- prcomp(data1,center = TRUE, scale. = TRUE)
+#pca <- prcomp(log1p(t(expr + 1)), center = TRUE, scale. = TRUE)
+
+# Add 1 to all values in the expression data
+expr_plus_one <- expr + 1
+
+# Perform log transformation and then PCA on the adjusted data
+pca <- prcomp(log1p(t(expr_plus_one)), center = TRUE, scale. = TRUE)
+
+```
+
+
+```{r}
+library("factoextra")
+library("FactoMineR")
+pca.data <- PCA((expr+1), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data)
+```
+
+```{r}
+fviz_eig(pca.data, addlabels = TRUE, ylim = c(0, 70))
+```
+```{r}
+fviz_pca_var(pca.data) 
+```
+```{r}
+pca.data <- PCA(t(expr[,-1]), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data)
+```
+```{r}
+library(GenomicFeatures)
+# Replace "/path/to/your/file.gtf" with the actual path to your GTF file
+gtf_data <- readGFF("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/genome/gencode.v41.annotation.gtf")
+
+```
+
+```{r}
+#find genes that should be up-regulated
+match_gtf <- gtf_data[gtf_data$gene_name %in% subset_data$Symbol,]
+gene_id_gtf<-match_gtf$gene_id
+match_gene <- expr_with_gene_id[expr_with_gene_id$ensembl_gene_id_version %in% match_gtf$gene_id, ]
+#match_subset_data <- subset_data[subset_data$Symbol %in% gtf_data$gene_name ]
+dfn<-cbind(match_gtf$gene_id,match_gtf$gene_name)
+dfn<-data.frame(dfn)
+dfn<-unique(dfn)
+rownames(dfn)<-dfn$X1
+colnames(dfn)<-c("ensembl_gene_id_version","Symbol")
+#dfn<-dfn[,-1]
+match_gene_anno <- right_join(match_gene, 
+                                dfn ,
+                                by = "ensembl_gene_id_version")
+rownames(match_gene_anno)<-match_gene_anno$Symbol
+```
+ 
+```{r}
+m2<-log2(match_gene_anno[1:5]+1)
+hmap1 <- Heatmap(m2,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+```
+
+ 
+```{r}
+library("factoextra")
+library("FactoMineR")
+#expr_filtered <- expr[, -3]
+pca.data <- PCA(t(m2+1), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data, labelsize = 3, repel = TRUE,xlim=c(-50, 50) , ylim= c(-50, 50))+
+   theme(text = element_text(size = 7.5),
+         axis.title = element_text(size = 7.5),
+         axis.text = element_text(size = 7.5)
+         )
+```
+
+
+```{r}
+pca.data <- PCA((m2), scale.unit = TRUE, graph = FALSE)
+fviz_eig(pca.data, addlabels = TRUE, ylim = c(0, 70))
+fviz_pca_var(pca.data) 
+irispca <- PCA(iris,quali.sup = 5)
+fviz_pca_var(irispca, labelsize = 3, repel = TRUE) +
+  theme(text = element_text(size = 7.5),
+        axis.title = element_text(size = 7.5),
+        axis.text = element_text(size = 7.5))
+```
+
+```{r}
+
+##what is the distribution of the z-score calculate
+#take the matrix and melt to make a table 2 columns 1-sample 2- score value
+#plot the zscore variation 
+#first find the duplicates 
+#subset fo
+
+m1_melt <- reshape2::melt(match_gene_anno, id.vars="Symbol")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$Symbol, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+
+```
+```{r  1}
+m2_melt<-drop_na(m1_melt)
+
+#get the rows with the largest ranges 
+heatmap_input <- pivot_wider(m2_melt[c("Symbol","zscore","variable")], names_from = "variable",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+rownames(m1)<-heatmap_input$Symbol
+#calculate the ranges 
+#head(rowRanges(m1))
+```
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+
+```
+```{r}
+match_me3pos_gene <- expr_with_gene_id[expr_with_gene_id$ensembl_gene_id_version %in% pos_me3_list$ensembl_gene_id_version, ]
+pos_me3_list_match<-pos_me3_list[pos_me3_list$ensembl_gene_id_version %in% expr_with_gene_id$ensembl_gene_id_version,]
+match_me3pos_gene <- right_join(match_me3pos_gene, 
+                                pos_me3_list_match ,
+                                by = "ensembl_gene_id_version")
+```
+
+```{r}
+overlap_me3_up <- pos_me3_list[pos_me3_list$Symbol %in% subset_data$Symbol, ]
+#match_me3pos_gene <- right_join(match_gene, 
+#                                dfn ,
+#                                by = "ensembl_gene_id_version")
+```
+
+```{r}
+match_me3pos_gene<-data.frame(match_me3pos_gene)
+match_me3pos_gene <- match_me3pos_gene[!duplicated(match_me3pos_gene[c("Symbol")]), ]
+rownames(match_me3pos_gene)<-match_me3pos_gene$Symbol
+m2<-log2(match_me3pos_gene[1:5]+1)
+hmap1 <- Heatmap(m2,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+```
+```{r}
+expressed <- apply(match_me3pos_gene, 1, function(row) all(row > 0))
+match_me3pos_gene <- match_me3pos_gene[which(expressed),]
+```
+
+```{r}
+match_me3pos_gene<-data.frame(match_me3pos_gene)
+match_me3pos_gene <- match_me3pos_gene[!duplicated(match_me3pos_gene[c("Symbol")]), ]
+rownames(match_me3pos_gene)<-match_me3pos_gene$Symbol
+m2<-log2(match_me3pos_gene[1:5]+1)
+hmap1 <- Heatmap(m2,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+```
+```{r}
+library("factoextra")
+library("FactoMineR")
+#expr_filtered <- expr[, -3]
+pca.data <- PCA(t(m2+1), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data, labelsize = 3, repel = TRUE,xlim=c(-10, 10) , ylim= c(-10, 10))+
+   theme(text = element_text(size = 7.5),
+         axis.title = element_text(size = 7.5),
+         axis.text = element_text(size = 7.5)
+         )
+```
+```{r}
+
+##what is the distribution of the z-score calculate
+#take the matrix and melt to make a table 2 columns 1-sample 2- score value
+#plot the zscore variation 
+#first find the duplicates 
+#subset fo
+
+m1_melt <- reshape2::melt(match_me3pos_gene, id.vars="Symbol")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$Symbol, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+
+```
+```{r  1}
+m2_melt<-drop_na(m1_melt)
+
+#get the rows with the largest ranges 
+heatmap_input <- pivot_wider(m2_melt[c("Symbol","zscore","variable")], names_from = "variable",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+rownames(m1)<-heatmap_input$Symbol
+#calculate the ranges 
+#head(rowRanges(m1))
+```
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+
+```
+```{r}
+check<- match_me3pos_gene[match_me3pos_gene$Symbol %in% heatmap_input$Symbol,]
+```
+
+
+

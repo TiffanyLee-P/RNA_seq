@@ -1,0 +1,343 @@
+---
+title: "zscore_analysis"
+output: html_document
+date: "2024-03-17"
+---
+
+```{r load data, include=FALSE}
+#load("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/helen_corrected.RData")
+setwd("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3")
+samples <- list.files("rsem")
+expr <- sapply(samples, function(sample){
+  file <- paste0("rsem/",sample,"/",sample,".genes.results")
+  quant <- read.csv(file, sep="\t", header=T)
+  tpm <- setNames(quant$TPM, quant$gene_id)
+  return(tpm)
+})
+```
+
+
+```{r load library, include=FALSE}
+library(tibble)
+library(dplyr)
+library(biomaRt)
+library(ggplot2)
+library(RColorBrewer)
+library(ComplexHeatmap)
+library(biomaRt)
+library(data.table)
+library(tidyr)
+library(matrixStats)
+library(ggplot2)
+library(plyr)
+```
+
+```{r generate metadata}
+metadata <- tibble(
+  SampleName = c(
+    "R1_D3_PRC2i","R1_D6_PRC2i","R2_D3_DMSO","R2_D3_PRC2i","R2_D9_DMSO"),
+  Filename = c(
+    "Replicate1_Day3_PRC2i",
+    "Replicate1_Day6_PRC2i",
+    "Replicate2_Day3_DMSO",
+    "Replicate2_Day3_PRC2i",
+    "Replicate2_Day9_DMSO"
+  ),
+  Replicate = c(
+    "1","1","2","2","2"
+  ),
+  Treatment = c(
+    "PRC2i","PRC2i","DMSO","PRC2i","Washout"
+  ),
+  Timepoint = c(
+    "Day3","Day6","Day3","Day3","Day9"
+  )
+)
+print(metadata)
+
+
+```
+
+
+
+```{r check expression, echo=FALSE}
+# Identify constant or zero columns
+
+
+ensembl <-
+  useMart("ENSEMBL_MART_ENSEMBL", 
+          host="https://grch37.ensembl.org",
+          path="/biomart/martservice", 
+          dataset = "hsapiens_gene_ensembl")
+meta_genes <- getBM(attributes = c("ensembl_gene_id",
+                                    "ensembl_gene_id_version",
+                                     "hgnc_symbol",
+                                     "description",
+                                   
+                                  "chromosome_name",
+                                     "start_position",
+                                     "entrezgene_id",
+                                     "end_position",
+                                    "strand"),
+                      filters = "ensembl_gene_id_version",
+                      values = rownames(expr),
+                      mart = ensembl) %>%
+    right_join(data.frame(ensembl_gene_id_version = rownames(expr)),
+               by = "ensembl_gene_id_version") %>%
+    distinct(ensembl_gene_id_version, .keep_all = TRUE)
+
+
+```
+
+```{r check expression2, echo=FALSE}
+expr <- expr[meta_genes$ensembl_gene_id_version,]
+#expr <- expr[meta_genes$hgnc_symbol,]
+expressed <- apply(expr, 1, function(row) all(row > 0))
+expr <- expr[which(expressed),]
+
+```
+
+
+```{r check expression3, echo=FALSE}
+expr_df <- data.frame(expr)
+expr_df <- as.data.frame(expr)
+expr_df$ensembl_gene_id_version <- rownames(expr_df)
+#expr_with_gene_id <- cbind(expr_df, meta_genes$ensembl_gene_id, meta_genes$hgnc_symbol)
+metagene_subset <- meta_genes[meta_genes$ensembl_gene_id_version %in% rownames(expr_df), ]
+
+expr_with_gene_id <- right_join(expr_df, 
+                                metagene_subset %>% 
+                                    dplyr::select(ensembl_gene_id_version, ensembl_gene_id,hgnc_symbol,entrezgene_id), 
+                                by = "ensembl_gene_id_version")
+rownames(expr_with_gene_id) <- expr_with_gene_id$ensembl_gene_id_version
+
+```
+
+
+```{r check expression4, echo=FALSE}
+dim(expr)
+
+avg_expr <- rowMeans(expr)
+
+layout(matrix(1:2, nrow=1))
+hist(avg_expr)
+hist(log2(avg_expr + 1))
+hist(log10(avg_expr +1 ))
+
+```
+```{r}
+
+##what is the distribution of the z-score calculate
+#take the matrix and melt to make a table 2 columns 1-sample 2- score value
+#plot the zscore variation 
+#first find the duplicates 
+#subset fo
+
+m1_melt <- reshape2::melt(expr_with_gene_id[1:6], id.vars="ensembl_gene_id_version")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$ensembl_gene_id_version, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+
+```
+
+
+```{r  1}
+m2_melt<-drop_na(m1_melt)
+
+#get the rows with the largest ranges 
+heatmap_input <- pivot_wider(m2_melt[c("ensembl_gene_id_version","zscore","variable")], names_from = "variable",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+rownames(m1)<-heatmap_input$ensembl_gene_id_version
+#calculate the ranges 
+#head(rowRanges(m1))
+```
+
+
+```{r}
+
+#calculate the ranges 
+head(rowRanges(m1))
+#select the rows of interest that are the top 2000 genes that have the largest change
+```
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+  # genelabels1 <- rowAnnotation(
+  #   Genes = anno_mark(
+  #     at = seq(1, nrow(m1)),
+  #     labels = rownames(m1),
+  #     labels_gp = gpar(fontsize = 4),
+  #     padding = 0.5))
+draw(hmap1)
+# draw(hmap1 + genelabels1)
+
+```
+
+
+
+```{r}
+library(GenomicFeatures)
+library(rtracklayer)
+# check the gtf file and annotation
+gtf_data <- readGFF("/srv/scratch/berrylab/z5459891/AGRF_data/AGRF_NXGSQCAGRF23110166-1_22J25VLT3/genome/gencode.v41.annotation.gtf")
+
+```
+
+```{r}
+#I drew a gene list from public dataset which indicates the up-regulated genes upon PRC2i treatment - so I can check the expression in my data
+genes <- read.delim("/srv/scratch/berrylab/z5459891/Sequencing_data/PRC2i/naive_primed/genes.tsv")
+genes<- data.frame(genes)
+top_table <- read.delim("/srv/scratch/berrylab/z5459891/Sequencing_data/PRC2i/naive_primed/GSE176172.top.table.tsv")
+top_table<- data.frame(top_table)
+# Assuming 'res_deseq' is your data frame
+subset_data <- subset(top_table, log2FoldChange < -1 & pvalue < 0.05)
+head(subset_data)
+```
+
+```{r}
+#find genes that should be up-regulated in the gtf file that I used for mapping
+match_gtf <- gtf_data[gtf_data$gene_name %in% subset_data$Symbol,]
+gene_id_gtf<-match_gtf$gene_id
+match_gene <- expr_with_gene_id[expr_with_gene_id$ensembl_gene_id_version %in% match_gtf$gene_id, ]
+#match_subset_data <- subset_data[subset_data$Symbol %in% gtf_data$gene_name ]
+dfn<-cbind(match_gtf$gene_id,match_gtf$gene_name)
+dfn<-data.frame(dfn)
+dfn<-unique(dfn)
+rownames(dfn)<-dfn$X1
+colnames(dfn)<-c("ensembl_gene_id_version","Symbol")
+#dfn<-dfn[,-1]
+match_gene_anno <- right_join(match_gene, 
+                                dfn ,
+                                by = "ensembl_gene_id_version")
+rownames(match_gene_anno)<-match_gene_anno$Symbol
+```
+ 
+```{r}
+#check their expression and display in heatmap
+m2<-log2(match_gene_anno[1:5]+1)
+m2<-drop_na(m2)
+hmap1 <- Heatmap(m2,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+```
+
+ 
+```{r}
+#pca analysis
+library("factoextra")
+library("FactoMineR")
+#expr_filtered <- expr[, -3]
+pca.data <- PCA(t(m2+1), scale.unit = TRUE, graph = FALSE)
+fviz_pca_ind(pca.data, labelsize = 3, repel = TRUE,xlim=c(-50, 50) , ylim= c(-50, 50))+
+   theme(text = element_text(size = 7.5),
+         axis.title = element_text(size = 7.5),
+         axis.text = element_text(size = 7.5)
+         )
+```
+
+
+
+
+```{r}
+#more pca
+pca.data <- PCA((m2), scale.unit = TRUE, graph = FALSE)
+fviz_eig(pca.data, addlabels = TRUE, ylim = c(0, 70))
+fviz_pca_var(pca.data) 
+irispca <- PCA(iris,quali.sup = 5)
+fviz_pca_var(irispca, labelsize = 3, repel = TRUE) +
+  theme(text = element_text(size = 7.5),
+        axis.title = element_text(size = 7.5),
+        axis.text = element_text(size = 7.5))
+```
+
+```{r}
+#z-score analysis
+match_gene_anno_z<-match_gene_anno[,-6]
+match_gene_anno_z<-match_gene_anno_z[,-6]
+match_gene_anno_z<-match_gene_anno_z[,-6]
+match_gene_anno_z<-match_gene_anno_z[,-6]
+m1_melt <- reshape2::melt(match_gene_anno_z, id.vars="Symbol")
+m1_melt$value <- as.numeric(m1_melt$value)
+m1_melt <- drop_na(m1_melt)
+m1_melt$zscore <- ave(m1_melt$value, m1_melt$Symbol, FUN=scale)
+
+mu <- ddply(m1_melt, "variable", summarise, grp.mean=mean(zscore))
+
+p<-ggplot(m1_melt, aes(x=zscore, color=variable)) +
+  geom_density()+
+  geom_vline(data=mu, aes(xintercept=grp.mean, color=variable),
+             linetype="dashed")
+p
+
+
+```
+```{r  1}
+m2_melt<-drop_na(m1_melt)
+
+#get the rows with the largest ranges 
+heatmap_input <- pivot_wider(m2_melt[c("Symbol","zscore","variable")], names_from = "variable",values_from = "zscore")
+dim(heatmap_input)
+#select for rows that have the largest range 
+m1 <- as.matrix(heatmap_input[2:6])
+rownames(m1)<-heatmap_input$Symbol
+#calculate the ranges 
+#head(rowRanges(m1))
+```
+```{r 2, echo=FALSE}
+hmap1 <- Heatmap(m1,# row (gene) parameters
+      cluster_rows = TRUE,
+      show_row_dend = TRUE,
+      #row_title = 'Statistically significant genes',
+      row_title_side = 'left',
+      row_title_gp = gpar(fontsize = 12,  fontface = 'bold'),
+      row_title_rot = 90,
+      show_row_names = FALSE,
+      row_names_gp = gpar(fontsize = 10, fontface = 'bold'),
+      row_names_side = 'left',
+      row_dend_width = unit(25,'mm'),)
+   genelabels1 <- rowAnnotation(
+     Genes = anno_mark(
+       at = seq(1, nrow(m2)),
+       labels = rownames(m2),
+       labels_gp = gpar(fontsize = 4),
+       padding = 0.5))
+draw(hmap1)
+draw(hmap1 + genelabels1)
+
+```
